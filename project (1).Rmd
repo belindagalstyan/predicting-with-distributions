@@ -1,0 +1,151 @@
+---
+title: "Predicting with distributions"
+author: "Belinda Galstyan"
+date: "September 14, 2020"
+output: pdf_document
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=F, warning=F)
+library(SportsAnalytics270)
+library(dplyr)
+library(ggplot2)
+library(VGAM)
+```
+
+
+```{r echo=FALSE}
+library(SportsAnalytics270)
+data(f_data_sm)
+unique(f_data_sm$LEAGUE)
+
+lig<-'Premier League'
+data<-f_data_sm%>%filter(LEAGUE==lig)
+head(data)
+```
+
+1. Calculating average number of goals. 
+
+```{r}
+data%>%
+  group_by(SEASON)%>%
+  summarise(Mean.FTHG=mean(FTHG),Mean.FTAG=mean(FTAG))%>%
+  arrange(SEASON)
+```
+
+2. Constructing a plot 
+```{r}
+data%>%
+  group_by(SEASON)%>%
+  summarise(Mean.FTHG=mean(FTHG),Mean.FTAG=mean(FTAG))%>%
+  arrange(desc(Mean.FTHG),desc(Mean.FTAG)) %>%
+  ggplot()+
+  geom_line( aes(x = SEASON, y = Mean.FTAG), color = 'green')+
+  geom_line( aes(x = SEASON, y = Mean.FTHG), color = 'red')+
+  labs(x='Season', y='Average Home/Away Goals', title = 'Scored goals dynamics')
+
+```
+
+```{r}
+# reshaping dataframe
+library(tidyr)
+wide_to_long<-data%>%
+  select(SEASON,DATE,HOMETEAM,AWAYTEAM,FTSC)%>%
+  gather(key='flag', value = 'Team',-c(SEASON, FTSC,DATE)) %>%
+  separate(FTSC, into = c('g1','g2'),sep = '-')%>%
+  mutate(scored=ifelse(flag=='HOMETEAM',as.numeric(g1),as.numeric(g2)),
+         conceded=ifelse(flag=='HOMETEAM',as.numeric(g2),as.numeric(g1)),
+         WL=ifelse(scored>conceded,'W',ifelse(scored<conceded,"L",'D')))%>%
+  select(-c(g1,g2))
+
+```
+
+
+```{r}
+# scored
+wide_to_long%>%
+  group_by(SEASON,Team)%>%
+  summarise(total_scored=sum(scored))%>%
+  arrange(SEASON, desc(total_scored))
+
+
+```
+
+
+```{r}
+# conceded
+wide_to_long%>%
+  group_by(SEASON,Team)%>%
+  summarise(total_conceded=sum(conceded))%>%
+  arrange(SEASON, (total_conceded))
+```
+
+
+## Predictions
+
+Creating a Function which takes following arguments f(ligue, season, home.T, away.T )
+and returns probabilities of  for win, draw, defeat for home team according to poisson distribution.
+
+```{r}
+options(scipen = 999)
+PredFunc1<-function(season,ligue,home.T,away.T,data=f_data_sm){
+  h<-data%>%
+    filter(SEASON==season,LEAGUE==ligue, HOMETEAM==home.T)%>%
+    summarise(mean=mean(FTHG))
+  a<-data%>%
+    filter(SEASON==season,LEAGUE==ligue, AWAYTEAM==away.T)%>%
+    summarise(mean=mean(FTAG))
+  gph<-dpois(c(0:9),lambda = h$mean)
+  gpa<-dpois(c(0:9),lambda = a$mean)
+  m<-gph %*% t(gpa)
+  df<-data.frame(Game=paste(home.T,"VS", away.T), Win=sum(m[lower.tri(m,diag = F)]), Draw=sum(diag(m)), Defeat=sum(m[upper.tri(m,diag = F)]), Type='Distribution')
+  return(df)
+}
+select
+# Example
+dist_data=PredFunc1(2019,'Premier League','Man United','Leicester')
+print(dist_data)
+
+```
+
+2. Using skellar distribution.
+
+```{r}
+set.seed(666)
+PredFunc2<-function(season,ligue,home.T,away.T,data=f_data_sm){
+  h<-data%>%
+    filter(SEASON==season,LEAGUE==ligue, HOMETEAM==home.T)%>%
+    summarise(mean=mean(FTHG))
+  a<-data%>%
+    filter(SEASON==season,LEAGUE==ligue, AWAYTEAM==away.T)%>%
+    summarise(mean=mean(FTAG))
+  df=data.frame(match=paste(home.T,"VS", away.T),Home.Mean=h$mean,Away.Mean=a$mean)
+  return(df)
+}
+
+scores<-PredFunc2(2019,'Premier League','Man United','Leicester')
+```
+
+```{r}
+dist<-rskellam(10000,mu1 = scores$Home.Mean, mu2 = scores$Away.Mean)
+```
+
+### Probabilities
+
+```{r}
+Win=sum(dist>0)/10000
+Draw=sum(dist==0)/10000
+Defeat=sum(dist<0)/10000
+
+dist_data=data.frame(Game=scores$match, Win,Draw,Defeat,Type='Model')
+
+```
+
+3. Comparing the probabilities above two methods.
+
+```{r}
+rbind(model_data,dist_data)
+```
+
